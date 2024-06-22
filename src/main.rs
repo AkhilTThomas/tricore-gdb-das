@@ -2,10 +2,12 @@
 use gdbstub::common::Signal;
 use gdbstub::conn::{Connection, ConnectionExt};
 use gdbstub::stub::{run_blocking, state_machine::GdbStubStateMachine};
-use gdbstub::stub::{DisconnectReason, GdbStub, MultiThreadStopReason, SingleThreadStopReason};
+use gdbstub::stub::{DisconnectReason, GdbStub, GdbStubError, MultiThreadStopReason, SingleThreadStopReason};
 use gdbstub::target::Target;
-
+use gdbstub::target::{TargetError, TargetResult};
+use std::error;
 use std::net::{TcpListener, TcpStream};
+use std::num::NonZeroUsize;
 
 use rust_mcd::core::CoreState;
 use std::path::PathBuf;
@@ -131,20 +133,25 @@ fn main() -> Result<(), i32> {
     };
 
     let res = loop {
+
         gdb = match gdb {
             GdbStubStateMachine::Idle(mut gdb) => {
                 let byte = gdb.borrow_conn().read().unwrap();
                 gdb.incoming_data(&mut target, byte).unwrap()
             }
-            GdbStubStateMachine::Running(gdb) => {
-                match gdb.report_stop(&mut target, MultiThreadStopReason::DoneStep) {
-                    Ok(gdb) => gdb,
-                    Err(e) => {
-                        break {
-                            println!("running err");
-                            Err(e)
-                        }
-                    }
+            GdbStubStateMachine::Running(mut gdb) => {
+                let stop_reason = target.clone().get_core_state();
+                
+                let conn = gdb.borrow_conn();
+                let data_to_read = conn.peek().unwrap().is_some();
+
+                if data_to_read {
+                    let byte = gdb.borrow_conn().read().unwrap();
+                    gdb.incoming_data(&mut target, byte).unwrap()
+                } else if stop_reason.is_ok() {
+                    gdb.report_stop(&mut target, MultiThreadStopReason::SwBreak(NonZeroUsize::new(1).unwrap())).unwrap()
+                } else {
+                    gdb.into()
                 }
             }
             GdbStubStateMachine::CtrlCInterrupt(gdb) => {

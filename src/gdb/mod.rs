@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self};
 
 use crate::DynResult;
 use anyhow::{Context,Result};
@@ -12,6 +12,7 @@ use gdbstub::target::ext::breakpoints::{Breakpoints, BreakpointsOps, SwBreakpoin
 use gdbstub::target::TargetResult;
 use gdbstub::target::{Target, TargetError};
 use gdbstub_arch::tricore::TricoreV1_6;
+use rust_mcd::core::CoreState;
 use rust_mcd::reset::ResetClass;
 mod chip_communication;
 pub mod das;
@@ -31,6 +32,7 @@ fn pretty_print_devices(devices: &[DeviceSelection]) {
         println!("Device {index}: {:?}", scanned_device.info.acc_hw())
     }
 }
+#[derive(Clone)]
 pub struct TricoreTarget {
     pub(crate) breakpoints: Vec<u32>,
     pub(crate) system: rust_mcd::system::System,
@@ -66,6 +68,14 @@ impl TricoreTarget {
             breakpoints: Vec::new(),
             system,
         })
+    }
+
+    pub fn get_core_state(self) -> DynResult<CoreState> {
+        let core = self.system.get_core(0)?;
+        
+        let core_info =core.query_state()?;
+
+        Ok(core_info.state)
     }
 }
 
