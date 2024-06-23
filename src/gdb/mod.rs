@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{self};
 
 use crate::DynResult;
-use anyhow::{Context,Result};
+use anyhow::{Context, Result};
 use gdbstub::common::Signal;
 use gdbstub::target;
 use gdbstub::target::ext::base::singlethread::{
@@ -19,8 +19,8 @@ pub mod das;
 pub mod elf;
 pub mod flash;
 
-use std::path::PathBuf;
 use chip_communication::DeviceSelection;
+use std::path::PathBuf;
 
 fn pretty_print_devices(devices: &[DeviceSelection]) {
     if devices.is_empty() {
@@ -72,8 +72,8 @@ impl TricoreTarget {
 
     pub fn get_core_state(self) -> DynResult<CoreState> {
         let core = self.system.get_core(0)?;
-        
-        let core_info =core.query_state()?;
+
+        let core_info = core.query_state()?;
 
         Ok(core_info.state)
     }

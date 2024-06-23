@@ -1,20 +1,13 @@
 //! tricore-gdb client
-use gdbstub::common::Signal;
-use gdbstub::conn::{Connection, ConnectionExt};
-use gdbstub::stub::{run_blocking, state_machine::GdbStubStateMachine};
-use gdbstub::stub::{DisconnectReason, GdbStub, GdbStubError, MultiThreadStopReason, SingleThreadStopReason};
-use gdbstub::target::Target;
-use gdbstub::target::{TargetError, TargetResult};
-use std::error;
+use gdbstub::conn::ConnectionExt;
+use gdbstub::stub::state_machine::GdbStubStateMachine;
+use gdbstub::stub::{DisconnectReason, GdbStub, MultiThreadStopReason};
 use std::net::{TcpListener, TcpStream};
 use std::num::NonZeroUsize;
-
-use rust_mcd::core::CoreState;
 use std::path::PathBuf;
 
 use clap::{crate_version, value_parser};
 use clap::{Arg, Command};
-use gdbstub::stub::BaseStopReason::Exited;
 
 // pub mod backtrace;
 mod gdb;
@@ -32,60 +25,6 @@ fn wait_for_tcp(port: u16) -> DynResult<TcpStream> {
 
     Ok(stream)
 }
-enum TricoreGdbEventLoop {}
-
-impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
-    type Target = TricoreTarget;
-    type Connection = Box<dyn ConnectionExt<Error = std::io::Error>>;
-    type StopReason = SingleThreadStopReason<u32>;
-
-    #[allow(clippy::type_complexity)]
-    fn wait_for_stop_reason(
-        target: &mut TricoreTarget,
-        conn: &mut Self::Connection,
-    ) -> Result<
-        run_blocking::Event<SingleThreadStopReason<u32>>,
-        run_blocking::WaitForStopReasonError<
-            <Self::Target as Target>::Error,
-            <Self::Connection as Connection>::Error,
-        >,
-    > {
-        let core = match target.system.get_core(0) {
-            Ok(core) => core,
-            Err(_) => {
-                return Err(run_blocking::WaitForStopReasonError::Target(
-                    "Fatal error",
-                ))
-            }
-        };
-        loop {
-            let state = match core.query_state() {
-                Ok(state) => state,
-                Err(_) => {
-                    return Err(run_blocking::WaitForStopReasonError::Target(
-                        "Fatal error",
-                    ))
-                }
-            };
-            if state.state != CoreState::Running {
-                // println!("Core in state {:?}",state.state);
-                break;
-            }
-        }
-
-        Ok(run_blocking::Event::TargetStopped(Exited(0)))
-    }
-
-    fn on_interrupt(
-        _target: &mut TricoreTarget,
-    ) -> Result<Option<SingleThreadStopReason<u32>>, <TricoreTarget as Target>::Error> {
-        // Because this emulator runs as part of the GDB stub loop, there isn't any
-        // special action that needs to be taken to interrupt the underlying target. It
-        // is implicitly paused whenever the stub isn't within the
-        // `wait_for_stop_reason` callback.
-        Ok(Some(SingleThreadStopReason::Signal(Signal::SIGINT)))
-    }
-}
 
 fn main() -> Result<(), i32> {
     let about = "GDB client interface via miniwiggler".to_string();
@@ -98,7 +37,7 @@ fn main() -> Result<(), i32> {
                 .long("elf_file")
                 .value_name("FILE")
                 .required(false)
-                .value_parser(value_parser!(PathBuf))
+                .value_parser(value_parser!(PathBuf)),
         )
         .arg(
             Arg::new("tcp_port")
@@ -106,7 +45,7 @@ fn main() -> Result<(), i32> {
                 .value_name("TCP_PORT")
                 .required(false)
                 .value_parser(value_parser!(u16))
-                .default_value("9001")
+                .default_value("9001"),
         )
         .get_matches();
 
@@ -133,7 +72,6 @@ fn main() -> Result<(), i32> {
     };
 
     let res = loop {
-
         gdb = match gdb {
             GdbStubStateMachine::Idle(mut gdb) => {
                 let byte = gdb.borrow_conn().read().unwrap();
@@ -141,7 +79,7 @@ fn main() -> Result<(), i32> {
             }
             GdbStubStateMachine::Running(mut gdb) => {
                 let stop_reason = target.clone().get_core_state();
-                
+
                 let conn = gdb.borrow_conn();
                 let data_to_read = conn.peek().unwrap().is_some();
 
@@ -149,7 +87,11 @@ fn main() -> Result<(), i32> {
                     let byte = gdb.borrow_conn().read().unwrap();
                     gdb.incoming_data(&mut target, byte).unwrap()
                 } else if stop_reason.is_ok() {
-                    gdb.report_stop(&mut target, MultiThreadStopReason::SwBreak(NonZeroUsize::new(1).unwrap())).unwrap()
+                    gdb.report_stop(
+                        &mut target,
+                        MultiThreadStopReason::SwBreak(NonZeroUsize::new(1).unwrap()),
+                    )
+                    .unwrap()
                 } else {
                     gdb.into()
                 }
