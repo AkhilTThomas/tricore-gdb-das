@@ -1,6 +1,3 @@
-use std::error::Error;
-use std::fmt::{self};
-
 use crate::DynResult;
 use anyhow::{Context, Result};
 use gdbstub::common::Signal;
@@ -21,6 +18,8 @@ pub mod flash;
 pub mod tricore;
 
 use chip_communication::DeviceSelection;
+use std::error::Error;
+use std::fmt;
 use std::path::PathBuf;
 
 fn pretty_print_devices(devices: &[DeviceSelection]) {
@@ -33,14 +32,17 @@ fn pretty_print_devices(devices: &[DeviceSelection]) {
         println!("Device {index}: {:?}", scanned_device.info.acc_hw())
     }
 }
-#[derive(Clone)]
-pub struct TricoreTarget {
+
+pub struct TricoreTarget<'a> {
     pub(crate) breakpoints: Vec<u32>,
     pub(crate) system: rust_mcd::system::System,
+    pub(crate) core: rust_mcd::core::Core<'a>,
 }
 
-impl TricoreTarget {
-    pub fn new(program_elf: Option<&PathBuf>) -> DynResult<TricoreTarget> {
+pub type StaticTricoreTarget = TricoreTarget<'static>;
+
+impl TricoreTarget<'static> {
+    pub fn new(program_elf: Option<&PathBuf>) -> DynResult<TricoreTarget<'static>> {
         let mut command_server = chip_communication::ChipCommunication::new()?;
         let scanned_devices = command_server.list_devices()?;
 
@@ -61,13 +63,18 @@ impl TricoreTarget {
         let system = command_server.get_system()?;
         let core = system.get_core(0)?;
         let system_reset = ResetClass::construct_reset_class(&core, 0);
+        core.reset(system_reset, true)?;
+
+        let static_core = unsafe {
+            std::mem::transmute::<rust_mcd::core::Core<'_>, rust_mcd::core::Core<'static>>(core)
+        };
 
         // Do we also need to reset the other cores?
-        core.reset(system_reset, true)?;
 
         Ok(TricoreTarget {
             breakpoints: Vec::new(),
             system,
+            core: static_core,
         })
     }
 
@@ -87,14 +94,7 @@ impl TricoreTarget {
                 break tricore::RunEvent::IncomingData;
             }
 
-            let core = self.system.get_core(0);
-
-            let core = match core {
-                Ok(core) => core,
-                Err(_) => todo!(),
-            };
-
-            let core_info = core.query_state();
+            let core_info = self.core.query_state();
 
             match core_info {
                 Ok(core_info) => match core_info.state {
@@ -134,7 +134,7 @@ impl fmt::Display for TricoreTargetError {
 
 impl Error for TricoreTargetError {}
 
-impl Target for TricoreTarget {
+impl Target for StaticTricoreTarget {
     type Arch = TricoreV1_6;
     type Error = &'static str;
 
@@ -149,19 +149,16 @@ impl Target for TricoreTarget {
     }
 }
 
-impl SingleThreadBase for TricoreTarget {
+impl SingleThreadBase for StaticTricoreTarget {
     fn read_registers(
         &mut self,
         regs: &mut gdbstub_arch::tricore::reg::TricoreCoreRegs,
     ) -> TargetResult<(), Self> {
-        let core = self
-            .system
-            .get_core(0)
-            .map_err(|_| TargetError::Fatal("Can't read register"))?;
-
-        let groups = core
+        let groups = self
+            .core
             .register_groups()
             .map_err(|_| TargetError::Fatal("Can't read register groups"))?;
+
         let group = groups
             .get_group(0)
             .map_err(|_| TargetError::Fatal("Can't read register groups"))?;
@@ -208,12 +205,8 @@ impl SingleThreadBase for TricoreTarget {
     }
 
     fn read_addrs(&mut self, start_addr: u32, data: &mut [u8]) -> TargetResult<usize, Self> {
-        let core = self
-            .system
-            .get_core(0)
-            .map_err(|_| TargetError::Fatal("Can't read address"))?;
-
-        let bytes = core
+        let bytes = self
+            .core
             .read_bytes(start_addr as u64, data.len())
             .map_err(|_| TargetError::Fatal("Can't read bytes"))?;
         // .with_context(|| format!("Cannot read from requested address range {:0x} - {:0x}", start_addr, start_addr + data.len()))?;
@@ -239,24 +232,13 @@ impl SingleThreadBase for TricoreTarget {
     // }
 }
 
-impl SingleThreadResume for TricoreTarget {
+impl SingleThreadResume for StaticTricoreTarget {
     fn resume(&mut self, signal: Option<Signal>) -> Result<(), Self::Error> {
         if signal.is_some() {
             return Err("no support for continuing with signal");
         }
 
-        let core_result = self.system.get_core(0).map_err(|_| "failed to get core");
-
-        match core_result {
-            Ok(core) => {
-                core.run().map_err(|_| "failed to run core")?;
-            }
-            Err(err) => {
-                return Err(err);
-            }
-        }
-
-        Ok(())
+        self.core.run().map_err(|_| "failed to run core")
     }
 
     #[inline(always)]
@@ -274,27 +256,17 @@ impl SingleThreadResume for TricoreTarget {
     // }
 }
 
-impl target::ext::base::singlethread::SingleThreadSingleStep for TricoreTarget {
+impl target::ext::base::singlethread::SingleThreadSingleStep for StaticTricoreTarget {
     fn step(&mut self, signal: Option<Signal>) -> Result<(), Self::Error> {
         if signal.is_some() {
             return Err("no support for stepping with signal");
         }
-        let core_result = self.system.get_core(0).map_err(|_| "failed to get core");
 
-        match core_result {
-            Ok(core) => {
-                core.step().map_err(|_| "failed to run core")?;
-            }
-            Err(err) => {
-                return Err(err);
-            }
-        }
-
-        Ok(())
+        self.core.step().map_err(|_| "failed to run core")
     }
 }
 
-impl Breakpoints for TricoreTarget {
+impl Breakpoints for StaticTricoreTarget {
     // there are several kinds of breakpoints - this target uses software breakpoints
     #[inline(always)]
     fn support_sw_breakpoint(&mut self) -> Option<SwBreakpointOps<'_, Self>> {
@@ -302,7 +274,7 @@ impl Breakpoints for TricoreTarget {
     }
 }
 
-impl target::ext::breakpoints::SwBreakpoint for TricoreTarget {
+impl target::ext::breakpoints::SwBreakpoint for StaticTricoreTarget {
     fn add_sw_breakpoint(
         &mut self,
         addr: u32,
@@ -311,20 +283,12 @@ impl target::ext::breakpoints::SwBreakpoint for TricoreTarget {
     ) -> TargetResult<bool, Self> {
         self.breakpoints.push(addr);
 
-        let core_result = self.system.get_core(0).map_err(|_| "failed to get core");
+        _ = self
+            .core
+            .create_breakpoint(rust_mcd::breakpoint::TriggerType::IP, addr as u64, 4)
+            .map_err(|_| "failed to set breakpoint");
+        self.core.download_triggers();
 
-        match core_result {
-            Ok(core) => {
-                println!("Breakpoint set!");
-                _ = core
-                    .create_breakpoint(rust_mcd::breakpoint::TriggerType::IP, addr as u64, 4)
-                    .map_err(|_| "failed to run core");
-                core.download_triggers();
-            }
-            Err(err) => {
-                return Err(TargetError::Fatal(err));
-            }
-        }
         Ok(true)
     }
 

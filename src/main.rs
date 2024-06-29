@@ -1,16 +1,14 @@
 //! tricore-gdb client
-use gdb::tricore;
+use clap::{crate_version, value_parser};
+use clap::{Arg, Command};
+use gdb::{tricore, StaticTricoreTarget};
 use gdbstub::common::Signal;
 use gdbstub::conn::{Connection, ConnectionExt};
-
 use gdbstub::stub::{run_blocking, DisconnectReason, GdbStub, SingleThreadStopReason};
 use gdbstub::target::Target;
 use pretty_env_logger;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-
-use clap::{crate_version, value_parser};
-use clap::{Arg, Command};
 
 // pub mod backtrace;
 mod gdb;
@@ -31,14 +29,16 @@ fn wait_for_tcp(port: u16) -> DynResult<TcpStream> {
 
 enum TricoreGdbEventLoop {}
 
+// type StaticTricoreTarget = TricoreTarget<'static>;
+
 impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
-    type Target = TricoreTarget;
+    type Target = StaticTricoreTarget;
     type Connection = Box<dyn ConnectionExt<Error = std::io::Error>>;
     type StopReason = SingleThreadStopReason<u32>;
 
     #[allow(clippy::type_complexity)]
     fn wait_for_stop_reason(
-        target: &mut TricoreTarget,
+        target: &mut StaticTricoreTarget,
         conn: &mut Self::Connection,
     ) -> Result<
         run_blocking::Event<SingleThreadStopReason<u32>>,
@@ -88,7 +88,7 @@ impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
 
     fn on_interrupt(
         _target: &mut TricoreTarget,
-    ) -> Result<Option<SingleThreadStopReason<u32>>, <TricoreTarget as Target>::Error> {
+    ) -> Result<Option<SingleThreadStopReason<u32>>, <StaticTricoreTarget as Target>::Error> {
         // Because this emulator runs as part of the GDB stub loop, there isn't any
         // special action that needs to be taken to interrupt the underlying target. It
         // is implicitly paused whenever the stub isn't within the
@@ -142,7 +142,6 @@ fn main() -> Result<(), i32> {
         Ok(disconnect_reason) => match disconnect_reason {
             DisconnectReason::Disconnect => {
                 println!("GDB client has disconnected. Running to completion...");
-                // while emu.step() != Some(emu::Event::Halted) {}
             }
             DisconnectReason::TargetExited(code) => {
                 println!("Target exited with code {}!", code)
