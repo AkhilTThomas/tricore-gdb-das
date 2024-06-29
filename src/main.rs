@@ -1,9 +1,12 @@
 //! tricore-gdb client
-use gdbstub::conn::ConnectionExt;
-use gdbstub::stub::state_machine::GdbStubStateMachine;
-use gdbstub::stub::{DisconnectReason, GdbStub, MultiThreadStopReason};
+use gdb::tricore;
+use gdbstub::common::Signal;
+use gdbstub::conn::{Connection, ConnectionExt};
+
+use gdbstub::stub::{run_blocking, DisconnectReason, GdbStub, SingleThreadStopReason};
+use gdbstub::target::Target;
+use pretty_env_logger;
 use std::net::{TcpListener, TcpStream};
-use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::{crate_version, value_parser};
@@ -26,7 +29,76 @@ fn wait_for_tcp(port: u16) -> DynResult<TcpStream> {
     Ok(stream)
 }
 
+enum TricoreGdbEventLoop {}
+
+impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
+    type Target = TricoreTarget;
+    type Connection = Box<dyn ConnectionExt<Error = std::io::Error>>;
+    type StopReason = SingleThreadStopReason<u32>;
+
+    #[allow(clippy::type_complexity)]
+    fn wait_for_stop_reason(
+        target: &mut TricoreTarget,
+        conn: &mut Self::Connection,
+    ) -> Result<
+        run_blocking::Event<SingleThreadStopReason<u32>>,
+        run_blocking::WaitForStopReasonError<
+            <Self::Target as Target>::Error,
+            <Self::Connection as Connection>::Error,
+        >,
+    > {
+        let poll_incoming_data = || {
+            // gdbstub takes ownership of the underlying connection, so the `borrow_conn`
+            // method is used to borrow the underlying connection back from the stub to
+            // check for incoming data.
+            conn.peek().map(|b| b.is_some()).unwrap_or(true)
+        };
+
+        match target.run(poll_incoming_data) {
+            tricore::RunEvent::IncomingData => {
+                let byte = conn
+                    .read()
+                    .map_err(run_blocking::WaitForStopReasonError::Connection)?;
+                Ok(run_blocking::Event::IncomingData(byte))
+            }
+            tricore::RunEvent::Event(event) => {
+                use gdbstub::target::ext::breakpoints::WatchKind;
+
+                // translate emulator stop reason into GDB stop reason
+                let stop_reason = match event {
+                    tricore::Event::DoneStep => SingleThreadStopReason::DoneStep,
+                    tricore::Event::Halted => SingleThreadStopReason::Terminated(Signal::SIGSTOP),
+                    tricore::Event::Break => SingleThreadStopReason::SwBreak(()),
+                    tricore::Event::WatchWrite(addr) => SingleThreadStopReason::Watch {
+                        tid: (),
+                        kind: WatchKind::Write,
+                        addr,
+                    },
+                    tricore::Event::WatchRead(addr) => SingleThreadStopReason::Watch {
+                        tid: (),
+                        kind: WatchKind::Read,
+                        addr,
+                    },
+                };
+
+                Ok(run_blocking::Event::TargetStopped(stop_reason))
+            }
+        }
+    }
+
+    fn on_interrupt(
+        _target: &mut TricoreTarget,
+    ) -> Result<Option<SingleThreadStopReason<u32>>, <TricoreTarget as Target>::Error> {
+        // Because this emulator runs as part of the GDB stub loop, there isn't any
+        // special action that needs to be taken to interrupt the underlying target. It
+        // is implicitly paused whenever the stub isn't within the
+        // `wait_for_stop_reason` callback.
+        Ok(Some(SingleThreadStopReason::Signal(Signal::SIGINT)))
+    }
+}
+
 fn main() -> Result<(), i32> {
+    pretty_env_logger::init();
     let about = "GDB client interface via miniwiggler".to_string();
 
     let matches = Command::new("tricore-gdb-das")
@@ -66,62 +138,31 @@ fn main() -> Result<(), i32> {
 
     let gdb = GdbStub::new(connection);
 
-    let mut gdb = match gdb.run_state_machine(&mut target) {
-        Ok(gdb) => gdb,
-        Err(e) => return Err(-1),
-    };
-
-    let res = loop {
-        gdb = match gdb {
-            GdbStubStateMachine::Idle(mut gdb) => {
-                let byte = gdb.borrow_conn().read().unwrap();
-                gdb.incoming_data(&mut target, byte).unwrap()
-            }
-            GdbStubStateMachine::Running(mut gdb) => {
-                let stop_reason = target.clone().get_core_state();
-
-                let conn = gdb.borrow_conn();
-                let data_to_read = conn.peek().unwrap().is_some();
-
-                if data_to_read {
-                    let byte = gdb.borrow_conn().read().unwrap();
-                    gdb.incoming_data(&mut target, byte).unwrap()
-                } else if stop_reason.is_ok() {
-                    gdb.report_stop(
-                        &mut target,
-                        MultiThreadStopReason::SwBreak(NonZeroUsize::new(1).unwrap()),
-                    )
-                    .unwrap()
-                } else {
-                    gdb.into()
-                }
-            }
-            GdbStubStateMachine::CtrlCInterrupt(gdb) => {
-                println!("ctrC trigg");
-                match gdb.interrupt_handled(&mut target, None::<MultiThreadStopReason<u32>>) {
-                    Ok(gdb) => gdb,
-                    Err(e) => {
-                        println!("ctrC err");
-                        break Err(e);
-                    }
-                }
-            }
-            GdbStubStateMachine::Disconnected(gdb) => break Ok(gdb.get_reason()),
-        }
-    };
-
-    match res {
+    match gdb.run_blocking::<TricoreGdbEventLoop>(&mut target) {
         Ok(disconnect_reason) => match disconnect_reason {
-            DisconnectReason::Disconnect => println!("GDB Disconnected"),
-            DisconnectReason::TargetExited(_) => println!("Target exited"),
-            DisconnectReason::TargetTerminated(_) => println!("Target halted"),
-            DisconnectReason::Kill => println!("GDB sent a kill command"),
+            DisconnectReason::Disconnect => {
+                println!("GDB client has disconnected. Running to completion...");
+                // while emu.step() != Some(emu::Event::Halted) {}
+            }
+            DisconnectReason::TargetExited(code) => {
+                println!("Target exited with code {}!", code)
+            }
+            DisconnectReason::TargetTerminated(sig) => {
+                println!("Target terminated with signal {}!", sig)
+            }
+            DisconnectReason::Kill => println!("GDB sent a kill command!"),
         },
         Err(e) => {
             if e.is_target_error() {
-                println!("Target raised a fatal error");
+                println!(
+                    "target encountered a fatal error: {}",
+                    e.into_target_error().unwrap()
+                )
+            } else if e.is_connection_error() {
+                let (e, kind) = e.into_connection_error().unwrap();
+                println!("connection error: {:?} - {}", kind, e,)
             } else {
-                print!("gdbstub internal error");
+                println!("gdbstub encountered a fatal error: {}", e)
             }
         }
     }

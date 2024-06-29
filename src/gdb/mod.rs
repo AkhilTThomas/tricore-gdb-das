@@ -18,6 +18,7 @@ mod chip_communication;
 pub mod das;
 pub mod elf;
 pub mod flash;
+pub mod tricore;
 
 use chip_communication::DeviceSelection;
 use std::path::PathBuf;
@@ -77,6 +78,36 @@ impl TricoreTarget {
 
         Ok(core_info.state)
     }
+
+    // run till event
+    pub fn run(&mut self, mut poll_incoming_data: impl FnMut() -> bool) -> tricore::RunEvent {
+        loop {
+            // poll for incoming data
+            if poll_incoming_data() {
+                break tricore::RunEvent::IncomingData;
+            }
+
+            let core = self.system.get_core(0);
+
+            let core = match core {
+                Ok(core) => core,
+                Err(_) => todo!(),
+            };
+
+            let core_info = core.query_state();
+
+            match core_info {
+                Ok(core_info) => match core_info.state {
+                    CoreState::Custom => todo!(),
+                    CoreState::Debug => return tricore::RunEvent::Event(tricore::Event::Break),
+                    CoreState::Halted => todo!(),
+                    CoreState::Running => {}
+                    CoreState::Unknown => todo!(),
+                },
+                Err(_) => todo!(),
+            }
+        }
+    }
 }
 
 /// Target-specific Fatal Error
@@ -126,12 +157,14 @@ impl SingleThreadBase for TricoreTarget {
         let core = self
             .system
             .get_core(0)
-            .map_err(|_| TargetError::Fatal("wtf"))?;
+            .map_err(|_| TargetError::Fatal("Can't read register"))?;
 
         let groups = core
             .register_groups()
-            .map_err(|_| TargetError::Fatal("wtf"))?;
-        let group = groups.get_group(0).map_err(|_| TargetError::Fatal("wtf"))?;
+            .map_err(|_| TargetError::Fatal("Can't read register groups"))?;
+        let group = groups
+            .get_group(0)
+            .map_err(|_| TargetError::Fatal("Can't read register groups"))?;
 
         let register = |name: &str| -> anyhow::Result<u32> {
             let reg = group.register(name).ok_or_else(|| {
@@ -144,43 +177,25 @@ impl SingleThreadBase for TricoreTarget {
             Ok(value)
         };
 
-        //regs.a0 = register("A0").map_err(|_| TargetError::Fatal("wtf"))?;
-        //regs.a1 = register("A1").map_err(|_| TargetError::Fatal("wtf"))?;
-        //regs.a2 = register("A2").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.a3 = register("A3").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.a4 = register("A4").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.a5 = register("A5").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.a6 = register("A6").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.a7 = register("A7").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.a8 = register("A8").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.a9 = register("A9").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.a10 = register("A10").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.a11 = register("A11").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.a12 = register("A12").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.a13 = register("A13").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.a14 = register("A14").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.a15 = register("A15").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.d0 = register("D0").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.d1 = register("D1").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.d2 = register("D2").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.d3 = register("D3").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.d4 = register("D4").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.d5 = register("D5").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.d6 = register("D6").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.d7 = register("D7").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.d8 = register("D8").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.d9 = register("D9").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.d10 = register("D10").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.d11 = register("D11").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.d12 = register("D12").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.d13 = register("D13").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.d14 = register("D14").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.d15 = register("D15").map_err(|_| TargetError::Fatal("wtf"))?;
-        //
-        regs.pc = register("PC").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.pcxi = register("PCXI").map_err(|_| TargetError::Fatal("wtf"))?;
-        regs.psw = register("PSW").map_err(|_| TargetError::Fatal("wtf"))?;
-        // regs.lcx = register("LCX").map_err(|_| TargetError::Fatal("wtf"))?;
+        regs.a10 = register("A10").map_err(|_| TargetError::Fatal("Can't read register A10"))?;
+        regs.a11 = register("A11").map_err(|_| TargetError::Fatal("Can't read register A11"))?;
+        regs.a12 = register("A12").map_err(|_| TargetError::Fatal("Can't read register A12"))?;
+        regs.a13 = register("A13").map_err(|_| TargetError::Fatal("Can't read register A13"))?;
+        regs.a14 = register("A14").map_err(|_| TargetError::Fatal("Can't read register A14"))?;
+        regs.a15 = register("A15").map_err(|_| TargetError::Fatal("Can't read register A15"))?;
+
+        regs.d8 = register("D8").map_err(|_| TargetError::Fatal("Can't read register D8"))?;
+        regs.d9 = register("D9").map_err(|_| TargetError::Fatal("Can't read register D9"))?;
+        regs.d10 = register("D10").map_err(|_| TargetError::Fatal("Can't read register D10"))?;
+        regs.d11 = register("D11").map_err(|_| TargetError::Fatal("Can't read register D11"))?;
+        regs.d12 = register("D12").map_err(|_| TargetError::Fatal("Can't read register D12"))?;
+        regs.d13 = register("D13").map_err(|_| TargetError::Fatal("Can't read register D13"))?;
+        regs.d14 = register("D14").map_err(|_| TargetError::Fatal("Can't read register D14"))?;
+        regs.d15 = register("D15").map_err(|_| TargetError::Fatal("Can't read register D15"))?;
+
+        regs.pc = register("PC").map_err(|_| TargetError::Fatal("Can't read register PC"))?;
+        regs.pcxi = register("PCXI").map_err(|_| TargetError::Fatal("Can't read register PCXI"))?;
+        regs.psw = register("PSW").map_err(|_| TargetError::Fatal("Can't read register PSW"))?;
 
         Ok(())
     }
@@ -196,11 +211,11 @@ impl SingleThreadBase for TricoreTarget {
         let core = self
             .system
             .get_core(0)
-            .map_err(|_| TargetError::Fatal("wtf"))?;
+            .map_err(|_| TargetError::Fatal("Can't read address"))?;
 
         let bytes = core
             .read_bytes(start_addr as u64, data.len())
-            .map_err(|_| TargetError::Fatal("wtf"))?;
+            .map_err(|_| TargetError::Fatal("Can't read bytes"))?;
         // .with_context(|| format!("Cannot read from requested address range {:0x} - {:0x}", start_addr, start_addr + data.len()))?;
 
         data.copy_from_slice(&bytes);
