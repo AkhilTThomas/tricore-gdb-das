@@ -9,6 +9,7 @@ use gdbstub::target::Target;
 use pretty_env_logger;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::string;
 
 // pub mod backtrace;
 mod gdb;
@@ -16,13 +17,13 @@ use crate::gdb::TricoreTarget;
 
 type DynResult<T> = Result<T, Box<dyn std::error::Error>>;
 
-fn wait_for_tcp(port: u16) -> DynResult<TcpStream> {
-    let sockaddr = format!("127.0.0.1:{}", port);
-    eprintln!("Waiting for a GDB connection on {:?}...", sockaddr);
+fn wait_for_tcp(port: u16, tcp_ip: &String) -> DynResult<TcpStream> {
+    let sockaddr = format!("{}:{}",tcp_ip, port);
+    println!("Waiting for a GDB connection on {:?}...", sockaddr);
 
     let sock = TcpListener::bind(sockaddr)?;
     let (stream, addr) = sock.accept()?;
-    eprintln!("Debugger connected from {}", addr);
+    println!("Debugger connected from {}", addr);
 
     Ok(stream)
 }
@@ -64,7 +65,6 @@ impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
             tricore::RunEvent::Event(event) => {
                 use gdbstub::target::ext::breakpoints::WatchKind;
 
-                // translate emulator stop reason into GDB stop reason
                 let stop_reason = match event {
                     tricore::Event::DoneStep => SingleThreadStopReason::DoneStep,
                     tricore::Event::Halted => SingleThreadStopReason::Terminated(Signal::SIGSTOP),
@@ -89,10 +89,6 @@ impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
     fn on_interrupt(
         _target: &mut TricoreTarget,
     ) -> Result<Option<SingleThreadStopReason<u32>>, <StaticTricoreTarget as Target>::Error> {
-        // Because this emulator runs as part of the GDB stub loop, there isn't any
-        // special action that needs to be taken to interrupt the underlying target. It
-        // is implicitly paused whenever the stub isn't within the
-        // `wait_for_stop_reason` callback.
         Ok(Some(SingleThreadStopReason::Signal(Signal::SIGINT)))
     }
 }
@@ -110,6 +106,14 @@ fn main() -> Result<(), i32> {
                 .value_name("FILE")
                 .required(false)
                 .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            Arg::new("tcp_ip")
+                .long("tcp_ip")
+                .value_name("TCP_IP")
+                .required(false)
+                .value_parser(value_parser!(String))
+                .default_value("127.0.0.1"),
         )
         .arg(
             Arg::new("tcp_port")
@@ -130,7 +134,8 @@ fn main() -> Result<(), i32> {
 
     let connection: Box<dyn ConnectionExt<Error = std::io::Error>> = {
         let tcp_port = matches.get_one::<u16>("tcp_port").unwrap();
-        Box::new(match wait_for_tcp(*tcp_port) {
+        let tcp_ip = matches.get_one::<String>("tcp_ip").unwrap();
+        Box::new(match wait_for_tcp(*tcp_port, tcp_ip) {
             Ok(tc) => tc,
             Err(_) => return Err(-1),
         })
