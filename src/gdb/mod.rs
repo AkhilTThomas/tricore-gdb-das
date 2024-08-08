@@ -2,6 +2,7 @@ use crate::DynResult;
 use anyhow::{Context, Result};
 use gdbstub::common::Signal;
 use gdbstub::target;
+use gdbstub::target::ext::base::multithread::MultiThreadBase;
 use gdbstub::target::ext::base::singlethread::{
     SingleThreadBase, SingleThreadResume, SingleThreadResumeOps,
 };
@@ -10,7 +11,7 @@ use gdbstub::target::ext::monitor_cmd::ConsoleOutput;
 use gdbstub::target::TargetResult;
 use gdbstub::target::{Target, TargetError};
 use gdbstub_arch::tricore::TricoreV1_6;
-use rust_mcd::core::{CoreState, Trigger};
+use rust_mcd::core::{Core, CoreState, Trigger};
 use rust_mcd::reset::ResetClass;
 mod chip_communication;
 use gdbstub::target::ext::monitor_cmd::outputln;
@@ -66,7 +67,7 @@ impl From<anyhow::Error> for TricoreTargetError {
 pub struct TricoreTarget<'a> {
     pub(crate) breakpoints: HashMap<u32, Trigger<'a>>,
     pub(crate) system: rust_mcd::system::System,
-    pub(crate) core: rust_mcd::core::Core<'a>,
+    pub(crate) core: Vec<Core<'a>>,
 }
 
 pub type StaticTricoreTarget = TricoreTarget<'static>;
@@ -97,43 +98,59 @@ impl TricoreTarget<'static> {
         }
 
         let system = command_server.get_system()?;
-        let core = system.get_core(0)?;
-        let system_reset = ResetClass::construct_reset_class(&core, 0);
-        core.reset(system_reset, true)?;
 
-        let static_core = unsafe {
-            std::mem::transmute::<rust_mcd::core::Core<'_>, rust_mcd::core::Core<'static>>(core)
-        };
+        let core_count = system.core_count();
+        println!("Detected {:?} core", core_count);
 
-        sleep(Duration::from_secs(2));
-
-        // Do we also need to reset the other cores?
+        let mut cores: Vec<Core<'static>> = Vec::with_capacity(core_count);
+        for core_index in 0..core_count {
+            let core = system.get_core(core_index)?;
+            let system_reset = ResetClass::construct_reset_class(&core, 0);
+            core.reset(system_reset, true)?;
+            let static_core: Core<'static> = unsafe {
+                std::mem::transmute::<Core<'_>, Core<'static>>(core)
+            };
+            cores.push(static_core);
+        }
 
         Ok(TricoreTarget {
             breakpoints: HashMap::new(),
             system,
-            core: static_core,
+            core: cores,
         })
     }
 
     // run till event
     pub fn run(&mut self, mut poll_incoming_data: impl FnMut() -> bool) -> tricore::RunEvent {
         loop {
+            
             if poll_incoming_data() {
                 break tricore::RunEvent::IncomingData;
             }
-
-            match self.core.query_state() {
-                Ok(core_info) => match core_info.state {
-                    CoreState::Debug => return tricore::RunEvent::Event(tricore::Event::Break),
-                    CoreState::Custom => todo!(),
-                    CoreState::Halted => todo!(),
-                    CoreState::Running => {}
-                    CoreState::Unknown => todo!(),
-                },
-                Err(_) => {
-                    todo!()
+            let mut all_cores_running = true;
+            for core in &mut self.core {
+                match core.query_state() {
+                    Ok(core_info) => match core_info.state {
+                        CoreState::Debug => return tricore::RunEvent::Event(tricore::Event::Break),
+                        CoreState::Custom => todo!(),
+                        CoreState::Halted => {
+                            all_cores_running = false;
+                        }
+                        CoreState::Running => {}
+                        CoreState::Unknown => todo!(),
+                    },
+                    Err(_) => {
+                        // todo!()
+                    }
                 }
+            }
+
+            if all_cores_running {
+                // All cores are running, continue the loop
+                continue;
+            } else {
+                // At least one core is halted, return the RunEvent::Event(tricore::Event::Break)
+                return tricore::RunEvent::Event(tricore::Event::Break);
             }
         }
     }
@@ -183,13 +200,39 @@ impl Target for StaticTricoreTarget {
     }
 }
 
+// #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+// pub enum CpuId {
+//     Cpu,
+// }
+
+// pub type Tid = core::num::NonZeroUsize;
+
+// pub fn cpuid_to_tid(id: CpuId) -> Tid {
+//     match id {
+//         CpuId::Cpu => Tid::new(1).unwrap(),
+//     }
+// }
+
+// fn tid_to_cpuid(tid: Tid) -> Result<CpuId, &'static str> {
+//     match tid.get() {
+//         1 => Ok(CpuId::Cpu),
+//         _ => Err("specified invalid core"),
+//     }
+// }
+
 impl SingleThreadBase for StaticTricoreTarget {
     fn read_registers(
         &mut self,
         regs: &mut gdbstub_arch::tricore::reg::TricoreCoreRegs,
     ) -> TargetResult<(), Self> {
+        // let cpu = match tid_to_cpuid(tid).map_err(TargetError::Fatal)? {
+        //     CpuId::Cpu => &mut self.cpu,
+        // };
+
+        println!("Core is in {:?}",self.core[0].query_state());
+
         let groups = self
-            .core
+            .core[0]
             .register_groups()
             .map_err(|_| TargetError::Fatal("Can't read register groups"))?;
 
@@ -240,7 +283,7 @@ impl SingleThreadBase for StaticTricoreTarget {
 
     fn read_addrs(&mut self, start_addr: u32, data: &mut [u8]) -> TargetResult<usize, Self> {
         let bytes = self
-            .core
+            .core[0]
             .read_bytes(start_addr as u64, data.len())
             .map_err(|_| TargetError::Fatal("read_addr failed"))?;
         // .with_context(|| format!("Cannot read from requested address range {:0x} - {:0x}", start_addr, start_addr + data.len()))?;
@@ -251,7 +294,7 @@ impl SingleThreadBase for StaticTricoreTarget {
     }
 
     fn write_addrs(&mut self, start_addr: u32, data: &[u8]) -> TargetResult<(), Self> {
-        self.core
+        self.core[0]
             .write(start_addr as u64, data.to_vec())
             .map_err(|_| TargetError::Fatal("Can't write address"))
     }
@@ -260,6 +303,15 @@ impl SingleThreadBase for StaticTricoreTarget {
     fn support_resume(&mut self) -> Option<SingleThreadResumeOps<'_, Self>> {
         Some(self)
     }
+
+    // fn list_active_threads(
+    //     &mut self,
+    //     register_thread: &mut dyn FnMut(Tid),
+    // ) -> Result<(), Self::Error> {
+    //     register_thread(cpuid_to_tid(CpuId::Cpu));
+    //     register_thread(cpuid_to_tid(CpuId::Cop));
+    //     Ok(())
+    // }
 
     // fn support_single_register_access(
     //     &mut self,
@@ -274,7 +326,7 @@ impl SingleThreadResume for StaticTricoreTarget {
             return Err("no support for continuing with signal");
         }
 
-        self.core.run().map_err(|_| "failed to run core")
+        self.core[0].run().map_err(|_| "failed to run core")
     }
 
     #[inline(always)]
@@ -299,7 +351,7 @@ impl target::ext::base::singlethread::SingleThreadSingleStep for StaticTricoreTa
             return Err("no support for stepping with signal");
         }
 
-        self.core.step().map_err(|_| "failed to run core")
+        self.core[0].step().map_err(|_| "failed to run core")
     }
 }
 
@@ -319,14 +371,14 @@ impl target::ext::breakpoints::SwBreakpoint for StaticTricoreTarget {
         _kind: usize,
     ) -> TargetResult<bool, Self> {
         let static_core: &'static mut rust_mcd::core::Core<'static> =
-            unsafe { std::mem::transmute(&mut self.core) };
+            unsafe { std::mem::transmute(&mut self.core[0]) };
 
         let trig =
             static_core.create_breakpoint(rust_mcd::breakpoint::TriggerType::IP, addr as u64, 4);
 
         match trig {
             Ok(trigger) => {
-                self.core.download_triggers();
+                self.core[0].download_triggers();
                 self.breakpoints.insert(addr, trigger);
                 Ok(true)
             }
