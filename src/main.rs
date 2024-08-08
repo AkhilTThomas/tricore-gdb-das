@@ -25,6 +25,8 @@ fn wait_for_tcp(port: u16, tcp_ip: &String) -> DynResult<TcpStream> {
     let (stream, addr) = sock.accept()?;
     println!("Debugger connected from {}", addr);
 
+    stream.set_nodelay(true).expect("set_nodelay call failed");
+
     Ok(stream)
 }
 
