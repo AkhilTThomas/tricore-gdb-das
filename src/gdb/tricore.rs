@@ -1,3 +1,5 @@
+use super::CpuId;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Event {
     DoneStep,
@@ -8,6 +10,6 @@ pub enum Event {
 }
 
 pub enum RunEvent {
+    Event(Event, CpuId),
     IncomingData,
-    Event(Event),
 }

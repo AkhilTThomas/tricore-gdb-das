@@ -4,7 +4,7 @@ use clap::{Arg, Command};
 use gdb::{tricore, StaticTricoreTarget};
 use gdbstub::common::Signal;
 use gdbstub::conn::{Connection, ConnectionExt};
-use gdbstub::stub::{run_blocking, DisconnectReason, GdbStub, SingleThreadStopReason};
+use gdbstub::stub::{run_blocking, DisconnectReason, GdbStub, MultiThreadStopReason};
 use gdbstub::target::Target;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -30,19 +30,17 @@ fn wait_for_tcp(port: u16, tcp_ip: &String) -> DynResult<TcpStream> {
 
 enum TricoreGdbEventLoop {}
 
-// type StaticTricoreTarget = TricoreTarget<'static>;
-
 impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
     type Target = StaticTricoreTarget;
     type Connection = Box<dyn ConnectionExt<Error = std::io::Error>>;
-    type StopReason = SingleThreadStopReason<u32>;
+    type StopReason = MultiThreadStopReason<u32>;
 
     #[allow(clippy::type_complexity)]
     fn wait_for_stop_reason(
         target: &mut StaticTricoreTarget,
         conn: &mut Self::Connection,
     ) -> Result<
-        run_blocking::Event<SingleThreadStopReason<u32>>,
+        run_blocking::Event<MultiThreadStopReason<u32>>,
         run_blocking::WaitForStopReasonError<
             <Self::Target as Target>::Error,
             <Self::Connection as Connection>::Error,
@@ -62,20 +60,22 @@ impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
                     .map_err(run_blocking::WaitForStopReasonError::Connection)?;
                 Ok(run_blocking::Event::IncomingData(byte))
             }
-            tricore::RunEvent::Event(event) => {
+            tricore::RunEvent::Event(event, cpuid) => {
                 use gdbstub::target::ext::breakpoints::WatchKind;
 
+                let tid = gdb::cpuid_to_tid(cpuid);
+
                 let stop_reason = match event {
-                    tricore::Event::DoneStep => SingleThreadStopReason::DoneStep,
-                    tricore::Event::Halted => SingleThreadStopReason::Terminated(Signal::SIGSTOP),
-                    tricore::Event::Break => SingleThreadStopReason::SwBreak(()),
-                    tricore::Event::WatchWrite(addr) => SingleThreadStopReason::Watch {
-                        tid: (),
+                    tricore::Event::DoneStep => MultiThreadStopReason::DoneStep,
+                    tricore::Event::Halted => MultiThreadStopReason::Terminated(Signal::SIGSTOP),
+                    tricore::Event::Break => MultiThreadStopReason::SwBreak(tid),
+                    tricore::Event::WatchWrite(addr) => MultiThreadStopReason::Watch {
+                        tid,
                         kind: WatchKind::Write,
                         addr,
                     },
-                    tricore::Event::WatchRead(addr) => SingleThreadStopReason::Watch {
-                        tid: (),
+                    tricore::Event::WatchRead(addr) => MultiThreadStopReason::Watch {
+                        tid,
                         kind: WatchKind::Read,
                         addr,
                     },
@@ -88,8 +88,8 @@ impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
 
     fn on_interrupt(
         _target: &mut TricoreTarget,
-    ) -> Result<Option<SingleThreadStopReason<u32>>, <StaticTricoreTarget as Target>::Error> {
-        Ok(Some(SingleThreadStopReason::Signal(Signal::SIGINT)))
+    ) -> Result<Option<MultiThreadStopReason<u32>>, <StaticTricoreTarget as Target>::Error> {
+        Ok(Some(MultiThreadStopReason::Signal(Signal::SIGINT)))
     }
 }
 
