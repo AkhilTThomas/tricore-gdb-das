@@ -6,20 +6,20 @@ use gdbstub::target::ext::base::singlethread::{
     SingleThreadBase, SingleThreadResume, SingleThreadResumeOps,
 };
 use gdbstub::target::ext::breakpoints::{Breakpoints, BreakpointsOps, SwBreakpointOps};
+use gdbstub::target::ext::monitor_cmd::ConsoleOutput;
 use gdbstub::target::TargetResult;
 use gdbstub::target::{Target, TargetError};
 use gdbstub_arch::tricore::TricoreV1_6;
 use rust_mcd::core::{CoreState, Trigger};
 use rust_mcd::reset::ResetClass;
-use gdbstub::target::ext::monitor_cmd::ConsoleOutput;
 mod chip_communication;
 use gdbstub::target::ext::monitor_cmd::outputln;
 pub mod das;
 pub mod elf;
 pub mod flash;
 pub mod tricore;
-use gdbstub::conn::{Connection, ConnectionExt};
 use chip_communication::DeviceSelection;
+use gdbstub::conn::{Connection, ConnectionExt};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -35,6 +35,31 @@ fn pretty_print_devices(devices: &[DeviceSelection]) {
     println!("Found {} devices:", devices.len());
     for (index, scanned_device) in devices.iter().enumerate() {
         println!("Device {index}: {:?}", scanned_device.info.acc_hw())
+    }
+}
+
+/// Target-specific Fatal Error
+#[derive(Debug)]
+enum TricoreTargetError {
+    // ...
+    Fatal(String),
+    TriggerRemoveFailed(anyhow::Error),
+}
+
+impl fmt::Display for TricoreTargetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TricoreTargetError::Fatal(msg) => write!(f, "Fatal error: {}", msg),
+            TricoreTargetError::TriggerRemoveFailed(e) => write!(f, "Trigger remove failed: {}", e),
+        }
+    }
+}
+
+impl Error for TricoreTargetError {}
+
+impl From<anyhow::Error> for TricoreTargetError {
+    fn from(e: anyhow::Error) -> Self {
+        TricoreTargetError::TriggerRemoveFailed(e)
     }
 }
 
@@ -91,50 +116,25 @@ impl TricoreTarget<'static> {
         })
     }
 
-
     // run till event
     pub fn run(&mut self, mut poll_incoming_data: impl FnMut() -> bool) -> tricore::RunEvent {
         loop {
-            // poll for incoming data
             if poll_incoming_data() {
                 break tricore::RunEvent::IncomingData;
             }
 
-            let core_info = self.core.query_state();
-
-            match core_info {
+            match self.core.query_state() {
                 Ok(core_info) => match core_info.state {
-                    CoreState::Custom => todo!(),
                     CoreState::Debug => return tricore::RunEvent::Event(tricore::Event::Break),
+                    CoreState::Custom => todo!(),
                     CoreState::Halted => todo!(),
                     CoreState::Running => {}
                     CoreState::Unknown => todo!(),
                 },
-                Err(_) => todo!(),
+                Err(_) => {
+                    todo!()
+                }
             }
-        }
-    }
-}
-
-/// Target-specific Fatal Error
-#[derive(Debug)]
-enum TricoreTargetError {
-    // ...
-    TriggerRemoveFailed(anyhow::Error),
-    Fatal,
-}
-
-impl From<anyhow::Error> for TricoreTargetError {
-    fn from(e: anyhow::Error) -> Self {
-        TricoreTargetError::TriggerRemoveFailed(e)
-    }
-}
-
-impl fmt::Display for TricoreTargetError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TricoreTargetError::TriggerRemoveFailed(e) => write!(f, "Trigger remove failed: {}", e),
-            TricoreTargetError::Fatal => write!(f, "Fatal error occurred"),
         }
     }
 }
@@ -162,15 +162,6 @@ impl target::ext::monitor_cmd::MonitorCmd for TricoreTarget<'static> {
         Ok(())
     }
 }
-
-impl From<TricoreTargetError> for TargetError<TricoreTargetError> {
-    fn from(e: TricoreTargetError) -> Self {
-        TargetError::Fatal(e)
-    }
-}
-
-
-impl Error for TricoreTargetError {}
 
 impl Target for StaticTricoreTarget {
     type Arch = TricoreV1_6;
@@ -260,7 +251,9 @@ impl SingleThreadBase for StaticTricoreTarget {
     }
 
     fn write_addrs(&mut self, start_addr: u32, data: &[u8]) -> TargetResult<(), Self> {
-        self.core.write(start_addr as u64,data.to_vec()).map_err(|_|  TargetError::Fatal("Can't write address"))
+        self.core
+            .write(start_addr as u64, data.to_vec())
+            .map_err(|_| TargetError::Fatal("Can't write address"))
     }
 
     #[inline(always)]
@@ -325,13 +318,12 @@ impl target::ext::breakpoints::SwBreakpoint for StaticTricoreTarget {
         //todo: refer type from gdbstub_arch
         _kind: usize,
     ) -> TargetResult<bool, Self> {
+        let static_core: &'static mut rust_mcd::core::Core<'static> =
+            unsafe { std::mem::transmute(&mut self.core) };
 
-        let static_core: &'static mut rust_mcd::core::Core<'static> = unsafe {
-            std::mem::transmute(&mut self.core)
-        };
-        
-        let trig = static_core.create_breakpoint(rust_mcd::breakpoint::TriggerType::IP, addr as u64, 4);
-        
+        let trig =
+            static_core.create_breakpoint(rust_mcd::breakpoint::TriggerType::IP, addr as u64, 4);
+
         match trig {
             Ok(trigger) => {
                 self.core.download_triggers();

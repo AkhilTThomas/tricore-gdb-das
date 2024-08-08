@@ -6,10 +6,8 @@ use gdbstub::common::Signal;
 use gdbstub::conn::{Connection, ConnectionExt};
 use gdbstub::stub::{run_blocking, DisconnectReason, GdbStub, SingleThreadStopReason};
 use gdbstub::target::Target;
-use pretty_env_logger;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::string;
 
 // pub mod backtrace;
 mod gdb;
@@ -18,7 +16,7 @@ use crate::gdb::TricoreTarget;
 type DynResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 fn wait_for_tcp(port: u16, tcp_ip: &String) -> DynResult<TcpStream> {
-    let sockaddr = format!("{}:{}",tcp_ip, port);
+    let sockaddr = format!("{}:{}", tcp_ip, port);
     println!("Waiting for a GDB connection on {:?}...", sockaddr);
 
     let sock = TcpListener::bind(sockaddr)?;
