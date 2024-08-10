@@ -1,4 +1,5 @@
 //! tricore-gdb client
+use anyhow::{anyhow, Error};
 use clap::{crate_version, value_parser};
 use clap::{Arg, Command};
 use gdb::{tricore, StaticTricoreTarget};
@@ -93,7 +94,7 @@ impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
     }
 }
 
-fn main() -> Result<(), i32> {
+fn main() -> Result<(), Error> {
     pretty_env_logger::init();
     let about = "GDB client interface via miniwiggler".to_string();
 
@@ -129,7 +130,7 @@ fn main() -> Result<(), i32> {
 
     let mut target = match TricoreTarget::new(file_path) {
         Ok(target) => target,
-        Err(_) => return Err(-1),
+        Err(_) => return Err(anyhow!("Unable to attach to tricore target, Is the board connected")),
     };
 
     let connection: Box<dyn ConnectionExt<Error = std::io::Error>> = {
@@ -137,8 +138,9 @@ fn main() -> Result<(), i32> {
         let tcp_ip = matches.get_one::<String>("tcp_ip").unwrap();
         Box::new(match wait_for_tcp(*tcp_port, tcp_ip) {
             Ok(tc) => tc,
-            Err(_) => return Err(-1),
+            Err(_) => return Err(anyhow!("Unable to connect to {}:{:?}",tcp_ip,*tcp_port)),
         })
+        
     };
 
     let gdb = GdbStub::new(connection);

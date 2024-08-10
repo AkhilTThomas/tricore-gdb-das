@@ -190,7 +190,7 @@ impl TricoreTarget<'static> {
                         CoreState::Custom => todo!(),
                         CoreState::Halted => {
                             let cpu_id = CpuId::try_from(index).expect("Unexpected core index");
-                            tricore::RunEvent::Event(tricore::Event::Break, cpu_id);
+                            return tricore::RunEvent::Event(tricore::Event::Break, cpu_id);
                         }
                         CoreState::Running => {
                             debug!("Core {:?} Running", index);
