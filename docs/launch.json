@@ -1,0 +1,48 @@
+/// Sample Launch configuration
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "(gdb) Launch",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/path/to/elf",
+            "args": [],
+            "stopAtEntry": true,
+            "cwd": "${workspaceRoot}",
+            "environment": [],
+            "externalConsole": true,
+            "linux": {
+                "MIMode": "gdb",
+                "miDebuggerPath": "/path/to/bin/tricore-gdb",
+                "miDebuggerServerAddress": "<ip on which tricore-gdb-das is launched>"
+
+            },
+            "stopAtConnect": true,
+            "launchCompleteCommand": "exec-continue",
+            // "preLaunchTask":"Launch tricore-gdb-das", Can be used to automate the launching
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description":  "Use tricore 1.6 architercture",
+                    "text": "set architecture TriCore:V1_6",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "set symbol path",
+                    "text": "symbol-file ${workspaceFolder}/path/to/elf",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "set substitute path",
+                    "text": "set substitute-path <from path> <to path>",
+                    "ignoreFailures": true
+                }
+            ]
+        }
+    ]
+}
