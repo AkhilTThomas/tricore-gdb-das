@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gdbstub::{
     common::Tid,
     target::{
@@ -6,8 +6,9 @@ use gdbstub::{
         TargetError, TargetResult,
     },
 };
+use log::debug;
 
-use super::{traits::TricoreTargetError, StaticTricoreTarget};
+use super::StaticTricoreTarget;
 
 impl MultiThreadBase for StaticTricoreTarget {
     fn read_registers(
@@ -28,36 +29,42 @@ impl MultiThreadBase for StaticTricoreTarget {
             .get_group(0)
             .map_err(|_| TargetError::Fatal("Can't read register groups"))?;
 
-        let register = |name: &str| -> anyhow::Result<u32> {
-            let reg = group.register(name).ok_or_else(|| {
-                anyhow::Error::msg(format!("Could not find {} register for core", name))
-            })?;
-
-            let value = reg
+        let read_register = |name: &str| -> TargetResult<u32, Self> {
+            group
+                .register(name)
+                .ok_or_else(|| TargetError::Fatal("Could not find {} register"))?
                 .read()
-                .with_context(|| format!("Cannot read {} register", name))?;
-            Ok(value)
+                .map_err(|_| TargetError::Fatal("Can't read register"))
         };
 
-        regs.a10 = register("A10").map_err(|_| TargetError::Fatal("Can't read register A10"))?;
-        regs.a11 = register("A11").map_err(|_| TargetError::Fatal("Can't read register A11"))?;
-        regs.a12 = register("A12").map_err(|_| TargetError::Fatal("Can't read register A12"))?;
-        regs.a13 = register("A13").map_err(|_| TargetError::Fatal("Can't read register A13"))?;
-        regs.a14 = register("A14").map_err(|_| TargetError::Fatal("Can't read register A14"))?;
-        regs.a15 = register("A15").map_err(|_| TargetError::Fatal("Can't read register A15"))?;
+        let register_names = [
+            "A10", "A11", "A12", "A13", "A14", "A15", "D8", "D9", "D10", "D11", "D12", "D13",
+            "D14", "D15", "PC", "PCXI", "PSW",
+        ];
 
-        regs.d8 = register("D8").map_err(|_| TargetError::Fatal("Can't read register D8"))?;
-        regs.d9 = register("D9").map_err(|_| TargetError::Fatal("Can't read register D9"))?;
-        regs.d10 = register("D10").map_err(|_| TargetError::Fatal("Can't read register D10"))?;
-        regs.d11 = register("D11").map_err(|_| TargetError::Fatal("Can't read register D11"))?;
-        regs.d12 = register("D12").map_err(|_| TargetError::Fatal("Can't read register D12"))?;
-        regs.d13 = register("D13").map_err(|_| TargetError::Fatal("Can't read register D13"))?;
-        regs.d14 = register("D14").map_err(|_| TargetError::Fatal("Can't read register D14"))?;
-        regs.d15 = register("D15").map_err(|_| TargetError::Fatal("Can't read register D15"))?;
-
-        regs.pc = register("PC").map_err(|_| TargetError::Fatal("Can't read register PC"))?;
-        regs.pcxi = register("PCXI").map_err(|_| TargetError::Fatal("Can't read register PCXI"))?;
-        regs.psw = register("PSW").map_err(|_| TargetError::Fatal("Can't read register PSW"))?;
+        for &name in &register_names {
+            let value = read_register(name)?;
+            match name {
+                "A10" => regs.a10 = value,
+                "A11" => regs.a11 = value,
+                "A12" => regs.a12 = value,
+                "A13" => regs.a13 = value,
+                "A14" => regs.a14 = value,
+                "A15" => regs.a15 = value,
+                "D8" => regs.d8 = value,
+                "D9" => regs.d9 = value,
+                "D10" => regs.d10 = value,
+                "D11" => regs.d11 = value,
+                "D12" => regs.d12 = value,
+                "D13" => regs.d13 = value,
+                "D14" => regs.d14 = value,
+                "D15" => regs.d15 = value,
+                "PC" => regs.pc = value,
+                "PCXI" => regs.pcxi = value,
+                "PSW" => regs.psw = value,
+                _ => unreachable!(),
+            }
+        }
 
         Ok(())
     }
@@ -80,8 +87,14 @@ impl MultiThreadBase for StaticTricoreTarget {
 
         let bytes = core
             .read_bytes(start_addr as u64, data.len())
-            .map_err(|_| TargetError::Fatal("read_addr failed"))?;
-        // .with_context(|| format!("Cannot read from requested address range {:0x} - {:0x}", start_addr, start_addr + data.len()))?;
+            .map_err(|_| {
+                debug!(
+                    "Cannot read from requested address range {:0x} - {:0x}",
+                    start_addr,
+                    start_addr + data.len() as u32
+                );
+                TargetError::NonFatal
+            })?;
 
         data.copy_from_slice(&bytes);
 
@@ -91,8 +104,10 @@ impl MultiThreadBase for StaticTricoreTarget {
     fn write_addrs(&mut self, start_addr: u32, data: &[u8], tid: Tid) -> TargetResult<(), Self> {
         let core = self.get_core(tid)?;
 
-        core.write(start_addr as u64, data.to_vec())
-            .map_err(|_| TricoreTargetError::Fatal("Can't write address".to_string()))?;
+        core.write(start_addr as u64, data.to_vec()).map_err(|_| {
+            debug!("Cannot write to addr {:0x} ", start_addr);
+            TargetError::NonFatal
+        })?;
         Ok(())
     }
 
