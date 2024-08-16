@@ -88,8 +88,10 @@ impl run_blocking::BlockingEventLoop for TricoreGdbEventLoop {
     }
 
     fn on_interrupt(
-        _target: &mut TricoreTarget,
+        target: &mut StaticTricoreTarget,
     ) -> Result<Option<MultiThreadStopReason<u32>>, <StaticTricoreTarget as Target>::Error> {
+        // halt each core
+        target.halt();
         Ok(Some(MultiThreadStopReason::Signal(Signal::SIGINT)))
     }
 }
@@ -130,7 +132,11 @@ fn main() -> Result<(), Error> {
 
     let mut target = match TricoreTarget::new(file_path) {
         Ok(target) => target,
-        Err(_) => return Err(anyhow!("Unable to attach to tricore target, Is the board connected")),
+        Err(_) => {
+            return Err(anyhow!(
+                "Unable to attach to tricore target, Is the board connected"
+            ))
+        }
     };
 
     let connection: Box<dyn ConnectionExt<Error = std::io::Error>> = {
@@ -138,9 +144,8 @@ fn main() -> Result<(), Error> {
         let tcp_ip = matches.get_one::<String>("tcp_ip").unwrap();
         Box::new(match wait_for_tcp(*tcp_port, tcp_ip) {
             Ok(tc) => tc,
-            Err(_) => return Err(anyhow!("Unable to connect to {}:{:?}",tcp_ip,*tcp_port)),
+            Err(_) => return Err(anyhow!("Unable to connect to {}:{:?}", tcp_ip, *tcp_port)),
         })
-        
     };
 
     let gdb = GdbStub::new(connection);

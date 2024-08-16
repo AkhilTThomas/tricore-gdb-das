@@ -49,7 +49,7 @@ impl target::ext::breakpoints::SwBreakpoint for StaticTricoreTarget {
         if let Some((_, trigger)) = self.breakpoints.remove_entry(&addr) {
             match trigger.remove() {
                 Ok(_) => Ok(true),
-                Err(e) => Err(TargetError::Fatal("Failed to remove trigger")),
+                Err(_) => Err(TargetError::Fatal("Failed to remove trigger")),
             }
         } else {
             Ok(false) // Address was not found

@@ -4,22 +4,25 @@ use gdbstub::common::Tid;
 use gdbstub::target;
 use gdbstub::target::ext::breakpoints::BreakpointsOps;
 
+use chip_communication::DeviceSelection;
 use gdbstub::target::Target;
 use gdbstub_arch::tricore::TricoreV1_6;
 use log::debug;
 use rust_mcd::core::{Core, CoreState, Trigger};
 use rust_mcd::reset::ResetClass;
-use chip_communication::DeviceSelection;
-use traits::TricoreTargetError;
 use std::collections::HashMap;
+use traits::TricoreTargetError;
 
 use std::path::PathBuf;
+use std::thread::sleep;
+use std::time::Duration;
 
 mod base;
 mod breakpoints;
 mod chip_communication;
 mod das;
 mod elf;
+mod extended_mode;
 mod flash;
 mod monitor;
 mod resume;
@@ -114,6 +117,7 @@ impl From<CpuId> for usize {
 
 pub struct TricoreTarget<'a> {
     pub(crate) breakpoints: HashMap<u32, Trigger<'a>>,
+    #[warn(dead_code)]
     pub(crate) system: rust_mcd::system::System,
     pub(crate) cores: Vec<Core<'a>>,
     /// Resume action to be used upon a continue request
@@ -147,6 +151,8 @@ impl TricoreTarget<'static> {
             None => println!("No elf provided..."),
         }
 
+        sleep(Duration::from_secs(2));
+
         let system = command_server.get_system()?;
 
         let core_count = system.core_count();
@@ -171,6 +177,13 @@ impl TricoreTarget<'static> {
             cores,
             resume_actions,
         })
+    }
+
+    pub fn restart(&mut self) {
+        for core in &mut self.cores.iter_mut() {
+            let system_reset = ResetClass::construct_reset_class(core, 0);
+            _ = core.reset(system_reset, true);
+        }
     }
 
     // run till event
@@ -205,6 +218,12 @@ impl TricoreTarget<'static> {
         }
     }
 
+    pub fn halt(&mut self) {
+        for core in &mut self.cores.iter_mut() {
+            _ = core.stop();
+        }
+    }
+
     fn get_core(&self, tid: Tid) -> Result<&Core<'static>, TricoreTargetError> {
         let core_id = tid_to_cpuid(tid).map_err(TricoreTargetError::Str)?;
         let index = usize::from(core_id);
@@ -230,6 +249,13 @@ impl Target for StaticTricoreTarget {
 
     #[inline(always)]
     fn support_monitor_cmd(&mut self) -> Option<target::ext::monitor_cmd::MonitorCmdOps<'_, Self>> {
+        Some(self)
+    }
+
+    #[inline(always)]
+    fn support_extended_mode(
+        &mut self,
+    ) -> Option<target::ext::extended_mode::ExtendedModeOps<'_, Self>> {
         Some(self)
     }
 }

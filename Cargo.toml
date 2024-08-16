@@ -13,7 +13,7 @@ log = "0.4.21"
 pretty_env_logger = "0.5.0"
 tempfile = "3.10.1"
 
-rust-mcd = {git = "https://github.com/veecle/tricore-probe.git"}
+rust-mcd = {git = "https://github.com/AkhilTThomas/tricore-probe.git", branch="feat/stop-cmd"}
 gdbstub = {git = "https://github.com/AkhilTThomas/gdbstub.git", branch="feat/tricore"}
 gdbstub_arch = {git = "https://github.com/AkhilTThomas/gdbstub.git", branch="feat/tricore"}
 
