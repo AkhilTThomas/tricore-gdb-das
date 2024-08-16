@@ -3,6 +3,8 @@ use gdbstub::target::{
     ext::breakpoints::{Breakpoints, SwBreakpointOps},
     TargetError, TargetResult,
 };
+use log::debug;
+use rust_mcd::core::Trigger;
 
 use super::StaticTricoreTarget;
 
@@ -21,23 +23,38 @@ impl target::ext::breakpoints::SwBreakpoint for StaticTricoreTarget {
         //todo: refer type from gdbstub_arch
         _kind: usize,
     ) -> TargetResult<bool, Self> {
-        let static_core: &'static mut rust_mcd::core::Core<'static> =
-            unsafe { std::mem::transmute(&mut self.cores[0]) };
+        //this is strange
+        let core_count = self.system.core_count();
 
-        let trig =
-            static_core.create_breakpoint(rust_mcd::breakpoint::TriggerType::IP, addr as u64, 4);
+        let mut triggers = <Vec<Trigger>>::new();
 
-        match trig {
-            Ok(trigger) => {
-                self.cores[0].download_triggers();
-                self.breakpoints.insert(addr, trigger);
-                Ok(true)
-            }
-            Err(_) => {
-                println!("Can't write to address: {:#01x}", addr);
-                Err(TargetError::Fatal("Can't write to address"))
+        for idx in 0..core_count {
+            let static_core: &'static mut rust_mcd::core::Core<'static> =
+                unsafe { std::mem::transmute(&mut self.cores[idx]) };
+
+            let trig = static_core.create_breakpoint(
+                rust_mcd::breakpoint::TriggerType::IP,
+                addr as u64,
+                4,
+            );
+
+            match trig {
+                Ok(trigger) => {
+                    self.cores[idx].download_triggers();
+                    triggers.push(trigger);
+                }
+                Err(_) => {
+                    debug!("Can't set breakpoint at address: {:#01x}", addr);
+                    return Err(TargetError::Fatal(stringify!(
+                        "Can't set breakpoint at address: {:#01x}",
+                        addr
+                    )));
+                }
             }
         }
+        self.breakpoints.insert(addr, triggers);
+
+        Ok(true)
     }
 
     fn remove_sw_breakpoint(
@@ -46,13 +63,14 @@ impl target::ext::breakpoints::SwBreakpoint for StaticTricoreTarget {
         //todo: refere type from gdbstub_arch
         _kind: usize,
     ) -> TargetResult<bool, Self> {
-        if let Some((_, trigger)) = self.breakpoints.remove_entry(&addr) {
-            match trigger.remove() {
-                Ok(_) => Ok(true),
-                Err(_) => Err(TargetError::Fatal("Failed to remove trigger")),
+        if let Some(triggers) = self.breakpoints.remove(&addr) {
+            for trigger in triggers {
+                match trigger.remove() {
+                    Ok(_) => debug!("Removed breakpoint at addr {:#01x}", addr),
+                    Err(_) => return Err(TargetError::Fatal("Failed to remove trigger")),
+                }
             }
-        } else {
-            Ok(false) // Address was not found
         }
+        Ok(true)
     }
 }

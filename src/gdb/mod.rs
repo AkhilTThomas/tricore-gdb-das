@@ -116,7 +116,7 @@ impl From<CpuId> for usize {
 }
 
 pub struct TricoreTarget<'a> {
-    pub(crate) breakpoints: HashMap<u32, Trigger<'a>>,
+    pub(crate) breakpoints: HashMap<u32, Vec<Trigger<'a>>>,
     #[warn(dead_code)]
     pub(crate) system: rust_mcd::system::System,
     pub(crate) cores: Vec<Core<'a>>,
@@ -203,6 +203,7 @@ impl TricoreTarget<'static> {
                         CoreState::Custom => todo!(),
                         CoreState::Halted => {
                             let cpu_id = CpuId::try_from(index).expect("Unexpected core index");
+                            debug!("Core: {:?} halted by breakpoint", cpu_id);
                             return tricore::RunEvent::Event(tricore::Event::Break, cpu_id);
                         }
                         CoreState::Running => {
