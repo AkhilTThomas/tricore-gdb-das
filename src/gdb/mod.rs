@@ -202,8 +202,9 @@ impl TricoreTarget<'static> {
                         }
                         CoreState::Custom => todo!(),
                         CoreState::Halted => {
+                            // Halted state is one in which core is not under debugger control
                             let cpu_id = CpuId::try_from(index).expect("Unexpected core index");
-                            debug!("Core: {:?} halted by breakpoint", cpu_id);
+                            debug!("Core: {:?} in halted state", cpu_id);
                             return tricore::RunEvent::Event(tricore::Event::Break, cpu_id);
                         }
                         CoreState::Running => {
@@ -226,11 +227,11 @@ impl TricoreTarget<'static> {
     }
 
     fn get_core(&self, tid: Tid) -> Result<&Core<'static>, TricoreTargetError> {
-        let core_id = tid_to_cpuid(tid).map_err(TricoreTargetError::Str)?;
+        let core_id = tid_to_cpuid(tid).map_err(|_|TricoreTargetError::Fatal(format!("tid_to_cpuid failed")))?;
         let index = usize::from(core_id);
         self.cores
             .get(index)
-            .ok_or_else(|| TricoreTargetError::Fatal("Invalid core index".to_string()))
+            .ok_or_else(|| TricoreTargetError::Fatal(format!("Invalid core index")))
     }
 }
 
