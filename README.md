@@ -23,4 +23,4 @@ This repository uses the MCD interfaces on rust (rust-mcd) from the [veecle-tric
 ```
 cargo run -- --tcp_ip <ip>
 ```
-Launch gdb from either vscode or gdb cmdline. A reference launch config is available [here](docs\launch.json)
+Launch gdb from either vscode or gdb cmdline. A reference launch config is available [here](docs/launch.json)
