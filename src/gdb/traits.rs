@@ -21,7 +21,7 @@ impl fmt::Display for TricoreTargetError {
 impl From<TricoreTargetError> for TargetError<&'static str> {
     fn from(error: TricoreTargetError) -> Self {
         match error {
-            TricoreTargetError::Fatal(s) => TargetError::Fatal("Fatal error"),
+            TricoreTargetError::Fatal(_s) => TargetError::Fatal("Fatal error"),
         }
     }
 }
