@@ -164,7 +164,7 @@ impl TricoreTarget<'static> {
         for core_index in 0..core_count {
             let core = system.get_core(core_index)?;
             let system_reset = ResetClass::construct_reset_class(&core, 0);
-            core.reset(system_reset, true)?;
+            core.reset(system_reset, false)?;
             let static_core: Core<'static> =
                 unsafe { std::mem::transmute::<Core<'_>, Core<'static>>(core) };
             cores.push(static_core);

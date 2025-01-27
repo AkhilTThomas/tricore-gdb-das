@@ -148,6 +148,8 @@ fn main() -> Result<(), Error> {
         })
     };
 
+    target.restart();
+
     let gdb = GdbStub::new(connection);
 
     match gdb.run_blocking::<TricoreGdbEventLoop>(&mut target) {

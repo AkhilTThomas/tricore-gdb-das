@@ -26,6 +26,8 @@ impl target::ext::breakpoints::SwBreakpoint for StaticTricoreTarget {
         //this is strange
         let core_count = self.system.core_count();
 
+        debug!("add_sw_breakpoint invoked at address: {:#01x}", addr);
+
         let mut triggers = <Vec<Trigger>>::new();
 
         for idx in 0..core_count {
